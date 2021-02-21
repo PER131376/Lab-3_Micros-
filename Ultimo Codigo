@@ -1,0 +1,183 @@
+; Archivo:	main.s
+; Dispositivo:	PIC16F887
+; Autor:	Selvin Peralta 
+; Compilador:	pic-as (v2.30), MPLABX V5.40
+;                
+; Programa:	TM0 y Tablas para Display 
+; Hardware:	LEDs en el puerto A, push en RB0
+;                       
+; Creado: 16 feb, 2021
+; Última modificación: 20 feb, 2021
+ 
+ PROCESSOR 16F887
+ #include <xc.inc>
+ 
+ ;configuration word 1
+  CONFIG FOSC=INTRC_NOCLKOUT	// Oscillador Interno sin salidas
+  CONFIG WDTE=OFF   // WDT disabled (reinicio repetitivo del pic)
+  CONFIG PWRTE=ON   // PWRT enabled  (espera de 72ms al iniciar)
+  CONFIG MCLRE=OFF  // El pin de MCLR se utiliza como I/O
+  CONFIG CP=OFF	    // Sin protección de código
+  CONFIG CPD=OFF    // Sin protección de datos
+  
+  CONFIG BOREN=OFF  // Sin reinicio cuándo el voltaje de alimentación baja de 4V
+  CONFIG IESO=OFF   // Reinicio sin cambio de reloj de interno a externo
+  CONFIG FCMEN=OFF  // Cambio de reloj externo a interno en caso de fallo
+  CONFIG LVP=ON     // programación en bajo voltaje permitida
+ 
+ ;configuration word 2
+  CONFIG WRT=OFF    // Protección de autoescritura por el programa desactivada
+  CONFIG BOR4V=BOR40V // Reinicio abajo de 4V, (BOR21V=2.1V)
+
+ PSECT udata_bank0 ;common memory
+    count:	DS  2 ;1 byte
+    ant_val:	DS  1
+    ;cont_big:	DS  1
+    
+ PSECT resVect, class=CODE, abs, delta=2
+ ;--------------vector reset------------------
+ ORG 00h	;posición 0000h para el reset
+ resetVec:
+     PAGESEL main
+     goto main
+     
+ PSECT code, delta=2, abs
+ ORG 100h	; posición para el código
+ 
+  ;------------------ TABLA -----------------------
+  
+ Tabla:
+    clrf  PCLATH	    ;Limpiar bits de la tabla 
+    bsf   PCLATH,0	    ;Set bit0 de PCLATH
+    andlw 0x0F		    ; Coloca los bits menos significativos como entradas 
+    addwf PCL		    ; Habilitamos los 4 bits de memoria del PCL para el registro PCLATH
+    retlw 00111111B          ; 0  Asignacion de los numero para los valores de salida del display 
+    retlw 00000110B          ; 1
+    retlw 01011011B          ; 2
+    retlw 01001111B          ; 3
+    retlw 01100110B          ; 4
+    retlw 01101101B          ; 5
+    retlw 01111101B          ; 6
+    retlw 00000111B          ; 7
+    retlw 01111111B          ; 8
+    retlw 01101111B          ; 9
+    retlw 01110111B          ; A
+    retlw 01111100B          ; b
+    retlw 00111001B          ; C
+    retlw 01011110B          ; d
+    retlw 01111001B          ; E
+    retlw 01110001B          ; F
+ ;-------------configuración------------------
+ main:
+    call    Config_TMR0
+    call    Clock
+    bsf	    STATUS, 5	; banco 11
+    bsf	    STATUS, 6
+    clrf    ANSEL	; pines digitales
+    clrf    ANSELH
+    
+    bsf	    STATUS, 5	; banco 01
+    bcf	    STATUS, 6
+    movlw   11110111B
+    movwf    TRISA	; port A como salida
+    movlw   11110000B
+    movwf    TRISB	; port A como salida
+    clrf     TRISD
+    clrf     TRISC
+    ;movlw   0000_0001b
+    
+    bcf	    STATUS, 5	; banco 00
+    bcf	    STATUS, 6
+    clrf    PORTA
+    clrf    PORTB
+    clrf    PORTC
+    clrf    PORTD
+;------------loop principal---------          
+ loop:
+    call   valor 
+    movf   PORTA, W
+    movwf  ant_val
+    call   delay_small
+		 
+    btfsc  ant_val, 0
+    call   inc_porta
+		 
+    btfsc  ant_val, 1
+    call   dec_porta
+    
+    btfss   T0IF        ; VERIFICA SI EL TMR0 SE A DESBORDADO
+    goto    loop        
+    call    Rein_TMR0
+    incf    PORTB
+    
+    incf  PORTD,w         ; MOVER EL VALOR DEL PUERTO B A "W"
+    subwf PORTB,w        ; RESTAR EL VALOR DE W AL VALOR DEL PORTD
+    
+    btfsc STATUS,2       ; VERIFICA SI EL RESULTADO DE LA RESTA ES "0"
+    call  alarma           ; SI EL RESULTADO DE LA RESTA ES 0 SE ENCIENDE EL LED
+    btfss STATUS,2       ; VERIFICA SI EL RESULTADO DE LA RESTA ES DIFENTE DE"0"
+    bcf   PORTA,3        ; SI EL RESULTADO DE LA RESTA NO ES 0 SE ENCIENDE EL LED
+    
+    goto   loop        ; loop forever
+;------------sub rutinas------------ 
+inc_porta:
+    btfss   PORTA, 0
+    incf    PORTD
+    return
+
+dec_porta:
+    btfss   PORTA, 1
+    decf    PORTD
+    return
+    
+ delay_small:
+    movlw   250		    ; valor inicial del contador
+    movwf   count	    
+    decfsz  count, 1   ; decrementar el contador
+    goto    $-1		    ; ejecutar línea anterior
+    return
+    
+valor:
+    movf    PORTD,w     ; MUEVE EL VALOR DEL PORTD A "W"
+    call    Tabla       ; LLAMA A LA TABLA CON LOS VALORES DEL DISPLAY
+    movwf   PORTC       ; MUEVE EL VALOR DEVUELTO POR LA TABLA AL PORTC
+    return
+    
+    
+Config_TMR0:
+    
+    banksel OPTION_REG  
+    bcf	    T0CS         ;Activar el tipo de reloj para el TMR0
+    bcf	    PSA	         ;Ponderacion para el reloj
+    bsf	    PS2
+    bsf	    PS1
+    bsf	    PS0	         ;PRESCALAR -> 256
+    call    Rein_TMR0
+    return
+    
+    
+Rein_TMR0: 
+    
+    banksel TMR0
+    movlw   240         ;Ponderacion del timer del reloj
+    movwf   TMR0
+    bcf	    T0IF
+    return
+    
+    
+Clock:
+    banksel OSCCON	 ;Banco OSCCON 
+    bcf	    IRCF2	 ;frecuencia de reloj interno -> 31KHz
+    bcf	    IRCF1	
+    bcf	    IRCF0	
+    bsf	    SCS		
+    return
+    
+alarma: 
+    bsf   PORTA,3        ; ENCIENDE EL LED DE ALARMA
+    clrf  PORTB          ; LIMPIA EL PORTB PARA REINICIAR EL CONTADOR BINARIO
+    return
+    
+    
+    
+END
